@@ -1,0 +1,63 @@
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: frontend-config, namespace: morays}
+data:
+  default.conf: |
+    server {
+      listen 8080;
+      server_name _;
+      root /usr/share/nginx/html;
+      index index.html;
+      location /api/products { proxy_pass http://products:5000; }
+      location /api/orders { proxy_pass http://orders:5000; }
+      location / { try_files $uri $uri/ /index.html; }
+    }
+  index.html: |
+    <!doctype html>
+    <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Morays Cloud Shop</title>
+    <style>
+      body{margin:0;font-family:Arial,sans-serif;background:#f1f5f9;color:#0f172a}header{background:linear-gradient(120deg,#0f172a,#2563eb);color:white;padding:45px 7%}h1{font-size:38px;margin:0 0 8px}.sub{opacity:.85}main{max-width:1080px;margin:35px auto;padding:0 20px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:22px}.card{background:white;border-radius:16px;padding:26px;box-shadow:0 4px 14px #0f172a15}.card h2{margin:6px 0}.price{font-size:30px;font-weight:bold;color:#2563eb}button{background:#2563eb;color:white;border:0;border-radius:9px;padding:12px 20px;cursor:pointer}button:hover{background:#1d4ed8}.status{margin:22px 0;padding:16px;border-radius:12px;background:#dbeafe}footer{text-align:center;margin:45px;color:#64748b}
+    </style></head>
+    <body><header><h1>Morays Cloud Shop</h1><div class="sub">Built with AWS EKS • Terraform • Kubernetes • Flask</div></header>
+    <main><h2>Explore our learning packages</h2><div id="status" class="status">Loading products from the Product API...</div><div id="products" class="grid"></div></main>
+    <footer>Microservices training project • Demo orders only • No payments</footer>
+    <script>
+      const statusEl=document.getElementById('status');
+      async function order(id){try{let r=await fetch('/api/orders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({product_id:id,quantity:1})});let x=await r.json();statusEl.textContent=r.ok?'✓ '+x.message+' (not saved)':'Error: '+x.error}catch(e){statusEl.textContent='Order API unavailable: '+e.message}}
+      async function load(){try{let r=await fetch('/api/products');if(!r.ok)throw Error('HTTP '+r.status);let products=await r.json();statusEl.textContent='✓ Product API connected • '+products.length+' products loaded';const box=document.getElementById('products');for(const p of products){let c=document.createElement('div');c.className='card';let h=document.createElement('h2');h.textContent=p.name;let d=document.createElement('p');d.textContent=p.description;let price=document.createElement('div');price.className='price';price.textContent='£'+p.price;let b=document.createElement('button');b.textContent='Place demo order';b.onclick=()=>order(p.id);c.append(h,d,price,b);box.append(c)}}catch(e){statusEl.textContent='Product API unavailable: '+e.message}}
+      load();
+    </script></body></html>
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: frontend, namespace: morays}
+spec:
+  replicas: 2
+  selector: {matchLabels: {app: frontend}}
+  template:
+    metadata: {labels: {app: frontend}}
+    spec:
+      containers:
+      - name: nginx
+        image: nginxinc/nginx-unprivileged:1.27-alpine
+        ports: [{containerPort: 8080}]
+        resources:
+          requests: {cpu: 25m, memory: 40Mi}
+          limits: {cpu: 200m, memory: 128Mi}
+        readinessProbe: {httpGet: {path: /, port: 8080}, initialDelaySeconds: 3, periodSeconds: 5}
+        livenessProbe: {httpGet: {path: /, port: 8080}, initialDelaySeconds: 15, periodSeconds: 10}
+        volumeMounts:
+        - {name: config, mountPath: /etc/nginx/conf.d/default.conf, subPath: default.conf, readOnly: true}
+        - {name: config, mountPath: /usr/share/nginx/html/index.html, subPath: index.html, readOnly: true}
+      volumes:
+      - name: config
+        configMap: {name: frontend-config}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: frontend, namespace: morays}
+spec:
+  type: LoadBalancer
+  selector: {app: frontend}
+  ports: [{port: 80, targetPort: 8080, protocol: TCP}]
